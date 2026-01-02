@@ -1,0 +1,79 @@
+---trabalho dengue em MG:
+title: "Casos de Dengue em Minas Gerais - 2023"
+subtitle: "Fonte: Datasus - TABNET"
+author: "Eduardo Garcez"
+date: "26/08/2025"
+output: 
+  html_document:
+    toc: TRUE
+    toc_float: TRUE
+---
+```{r, echo = FALSE, warning=FALSE, message=FALSE}
+pkgs <- c("sf", "geobr", "leaflet", "dplyr", "readr")
+to_install <- pkgs[!pkgs %in% installed.packages()[, "Package"]]
+if (length(to_install)) install.packages(to_install)
+
+library(dplyr)
+library(sf)
+library(geobr)
+library(leaflet)
+library(readxl)
+
+datasus <- read_excel("datasus.xlsx")
+
+#limpeza do Datasus e seleção de 2023 
+#as colunas "2013":"2025" estão com nomes numéricos, por isso as crases
+datasus_clean <- datasus %>%
+  mutate(across(`2013`:`2025`, as.character)) %>%
+  mutate(across(`2013`:`2025`, ~na_if(., "-"))) %>%
+  mutate(across(`2013`:`2025`, as.numeric))
+
+#pegando só o código IBGE de 6 dígitos e agregando por município
+casos_2023 <- datasus_clean %>%
+  transmute(
+    cod_muni = as.numeric(substr(`Município de notificação`, 1, 6)),
+    casos    = `2023`
+  ) %>%
+  filter(!is.na(cod_muni)) %>%
+  group_by(cod_muni) %>%
+  summarise(casos = sum(casos, na.rm = TRUE), .groups = "drop")
+
+#shapefile de MG com geobr
+mapa_mg <- read_municipality(code_muni = "MG", year = 2020) %>%
+  st_transform(4326) %>%                         
+  mutate(
+    code_muni6 = floor(as.numeric(code_muni) / 10)
+  )
+
+#Join por código de 6 dígitos do shapefile com os nossos dados
+mapa_mg_dados <- mapa_mg %>%
+  left_join(casos_2023, by = c("code_muni6" = "cod_muni"))
+
+#conferindo correspondência
+#cat("Municípios de MG sem dado após o join: ",
+#    sum(is.na(mapa_mg_dados$casos)), "de", nrow(mapa_mg_dados), "\n")
+
+#paleta e métricas
+bins <- c(0, 10, 50, 100, 500, 1000, Inf)
+pal  <- colorBin("YlOrRd", domain = mapa_mg_dados$casos, bins = bins, na.color = "transparent")
+
+#mapa
+leaflet(mapa_mg_dados) %>%
+  addProviderTiles(providers$OpenStreetMap.Mapnik) %>%
+  addPolygons(
+    fillColor   = ~pal(casos),
+    weight      = 1.2,
+    opacity     = 1,
+    fillOpacity = 0.7,
+    color       = "gray",
+    highlight   = highlightOptions(weight = 3, color = "#666", fillOpacity = 0.9, bringToFront = TRUE),
+    label       = ~sprintf("%s - Casos: %s", name_muni, ifelse(is.na(casos), "Sem dado", format(casos, big.mark="."))),
+    labelOptions = labelOptions(
+      style   = list("font-weight" = "normal", padding = "3px 8px"),
+      textsize = "13px",
+      direction = "auto"
+    )
+  ) %>%
+  addLegend(pal = pal, values = ~casos, opacity = 0.7,
+            title = "Casos em 2023", position = "bottomright")
+```
